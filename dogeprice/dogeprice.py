@@ -40,7 +40,9 @@ TICKER_URL = 'http://dogemonitor.com/ticker.php'
 
 MODULELOG = logging.getLogger(__name__)
 
+
 def get_cached_file():
+    """Open and return a cache file, if one exists and is recent enough."""
     try:
         mtime = os.stat(CACHE_FILE).st_mtime
     except OSError as exc:
@@ -51,13 +53,14 @@ def get_cached_file():
 
     if age > CACHE_TIME:
         MODULELOG.debug('%s is too old (%.1f seconds, %.1f max)',
-            CACHE_FILE, age, CACHE_TIME)
+                        CACHE_FILE, age, CACHE_TIME)
         return None
 
     return open(CACHE_FILE)
 
 
 def get_recent_rates():
+    """Return a rates dict fetched from cache or from a URL."""
     cached_file = get_cached_file()
     if cached_file:
         return json.load(cached_file)
@@ -71,18 +74,59 @@ def get_recent_rates():
     return json.loads(currency_feed)
 
 
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG)
-    rates = get_recent_rates()
+def format_money(amount, currency):
+    """Make monetary amounts look pretty.
 
+    This is sort of in the standard library in `locale`, but yeah.
+
+    """
+    try:
+        money_format = {
+            'eur': '€ %(amount).2f',
+            'gbp': '£%(amount).2f',
+            'pln': '%(amount).2f zł',
+            'usd': '$%(amount).2f',
+            'xdg': 'Ɖ%(amount).3f',
+        }[currency]
+    except KeyError:
+        money_format = '%(amount).f %(currency)s'
+
+    return money_format % {
+        'amount': amount,
+        'currency': currency.upper(),
+    }
+
+
+def rates_to_text(rates, currency, dogecoin_amount):
+    """Return a string describing the requested conversion."""
+    average_bitcoins_per_dogecoin = (
+        sum(float(_['price']) for _ in rates['tickers']) /
+        len(rates['tickers'])
+    )
+
+    currency_per_dogecoin = (average_bitcoins_per_dogecoin *
+                             rates['currencies'][currency])
+
+    if dogecoin_amount is None:
+        return '%s per %s' % (
+            format_money(1 / currency_per_dogecoin, 'xdg'),
+            format_money(1, currency),
+        )
+    else:
+        return '%s is %s' % (
+            format_money(dogecoin_amount, 'xdg'),
+            format_money(dogecoin_amount * currency_per_dogecoin, currency),
+        )
+
+
+def handle_command_line():
+    """Do the right thing with the command line (or Alfred query)."""
     # Running inside Alfred?
     args = '{query}'
     if args != '{' + 'query' + '}':
         args = args.split()
-        alfred = True
     else:
         args = sys.argv[1:]
-        alfred = False
 
     try:
         currency = args[1]
@@ -91,21 +135,12 @@ if __name__ == '__main__':
 
     try:
         dogecoin_amount = float(args[0])
-    except:
+    except (IndexError, ValueError):
         dogecoin_amount = None
 
-    average_bitcoins_per_dogecoin = (
-        sum(float(_['price']) for _ in rates['tickers']) /
-        len(rates['tickers'])
-    )
+    rates = get_recent_rates()
+    print(rates_to_text(rates, currency, dogecoin_amount))
 
-    currency_per_dogecoin = average_bitcoins_per_dogecoin * rates['currencies'][currency]
-
-    if dogecoin_amount is None:
-        print '%.1f Ɖ per 1 %s' % (1 / currency_per_dogecoin, currency.upper())
-    else:
-        print '%.1f Ɖ is %.2f %s' % (
-            dogecoin_amount,
-            dogecoin_amount * currency_per_dogecoin,
-            currency.upper()
-        )
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
+    handle_command_line()
